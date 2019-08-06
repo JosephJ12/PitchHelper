@@ -1,7 +1,8 @@
 import pyaudio
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+#from matplotlib.backends.backend_wxagg import NavigationToolbar2WxAgg as NavigationToolbar
+from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 import aubio
 from bs4 import BeautifulSoup
 from requests import get
@@ -31,18 +32,30 @@ class MenuWindow(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Show()
 
+        self.audio = None
+        self.synth = None
+
     def OnRecord(self, event):
-        self.audio = RecordWindow()
-        self.audio.main()
+        self.audio = RecordWindow(self)
+        self.audio.Show()
 
     def OnOpenSynth(self, event):
-        self.synth = SynthWindow()
+        self.synth = SynthWindow(self)
 
     def OnClose(self, event):
+        if self.audio:
+            self.audio.Destroy()
+        if self.synth:
+            self.synth.Destroy()
         self.Destroy()
 
 class SynthWindow(wx.Frame):
-    def __init__(self):
+    def __init__(self, parent):
+
+        self.stream = None
+        self.p = None
+        self.parent = parent
+
         super().__init__(parent=None, title='Synthesizer')
         self.panel = wx.Panel(self)
         self.sizer = wx.BoxSizer(wx.VERTICAL)
@@ -56,7 +69,7 @@ class SynthWindow(wx.Frame):
 
         #checks if .wav files for notes already exists
         #if not then creates them
-        if not os.path.exists(os.getcwd() + "/PitchHelper/Notes"):
+        if not os.path.exists(os.getcwd() + "/Notes"):
             # create audio files for individual notes
             #scrape note names online and use them to create audio files of each note
             url = "https://www.inspiredacoustics.com/en/MIDI_note_numbers_and_center_frequencies"
@@ -68,16 +81,17 @@ class SynthWindow(wx.Frame):
             notes = {}
             for row in rows:
                 col = row.find_all('td')
-                if(col[2].text.isdigit()):
-                    notename = col[3].text.lower().split("/")
-                    for n in notename:
-                        if (n != "\xa0") and ("note" not in n):
-                            if ("middle" in n) or ("concert" in n):
-                                temp_n = n.split(" ")
-                                new_n = temp_n[0]
-                                notes[new_n] = col[0].text
-                            else:
-                                notes[n] = col[0].text
+                if(len(col) > 0):
+                    if(col[2].text.isdigit()):
+                        notename = col[3].text.lower().split("/")
+                        for n in notename:
+                            if (n != "\xa0") and ("note" not in n):
+                                if ("middle" in n) or ("concert" in n):
+                                    temp_n = n.split(" ")
+                                    new_n = temp_n[0]
+                                    notes[new_n] = col[0].text
+                                else:
+                                    notes[n] = col[0].text
 
             for note in notes:
                 filename = note + ".wav"
@@ -94,7 +108,7 @@ class SynthWindow(wx.Frame):
         if not note[-1].isdigit():
             note = note + "4"
 
-        path = os.getcwd() + "/PitchHelper/Notes/"
+        path = os.getcwd() + "/Notes/"
         wavefile = path + note + ".wav"
         wf = wave.open(wavefile, 'rb')
         self.p = pyaudio.PyAudio()
@@ -118,12 +132,19 @@ class SynthWindow(wx.Frame):
         if self.p:
             self.p.terminate()
         self.Destroy()
+        self.parent.synth = None
 
 class RecordWindow(wx.Frame):
-    def __init__(self):
-        #super().__init__(parent=None, title='Audio Recorder')
-        plt.style.use('ggplot')
 
+    def __init__(self, parent):
+        self.stream = None
+        self.p = None
+        self.parent = parent
+
+        super().__init__(parent=None, title='Audio Recorder')
+        plt.style.use('dark_background')
+
+        #prep input stream for audio
         self.p = pyaudio.PyAudio()
         self.stream = self.p.open(format=pyaudio.paFloat32, channels=1, rate=RATE, input=True,
                         frames_per_buffer=CHUNK)
@@ -132,10 +153,14 @@ class RecordWindow(wx.Frame):
         hop_s = CHUNK
         self.notes_o = aubio.notes("default", win_s, hop_s, RATE)
 
+        #prep variables for plotting
         self.xs = []
         self.ys = []
-        self.fig, self.ax = plt.subplots()
+
+        self.fig = plt.figure()
+        self.ax = plt.axes(xlim=(0,100), ylim=(0,2000))
         self.line, = self.ax.plot([], [])
+        self.line.set_data(self.xs, self.ys)
 
         # scrape midi number to note conversion data online
         self.miditonote = {}
@@ -147,42 +172,87 @@ class RecordWindow(wx.Frame):
 
         for row in rows:
             col = row.find_all('td')
-            if col[0].text.isdigit():
-                midinumber = int(col[0].text)
-                self.miditonote[midinumber] = col[3].text
+            if(len(col) > 0):
+                if col[0].text.isdigit():
+                    midinumber = int(col[0].text)
+                    self.miditonote[midinumber] = col[3].text
 
+        #prep GUI
+        self.panel = wx.Panel(self, size=(780,480))
+        self.canvas = FigureCanvas(self.panel, -1, self.fig)
 
+        #sizer for graph
+        self.graphsizer = wx.BoxSizer(wx.VERTICAL)
+        self.graphsizer.Add(self.canvas, 1, wx.TOP | wx.LEFT | wx.GROW)
 
-    def initani(self):
-        self.ax.set_xlim(0, 300)
-        self.ax.set_ylim(0, 3000)
-        self.line.set_data(self.xs,self.ys)
-        return self.line,
+        #sizer for note and audio
+        self.audiosizer = wx.BoxSizer(wx.VERTICAL)
+        self.notetext = wx.StaticText(self.panel, style=wx.ALIGN_LEFT)
+        self.notetext.SetForegroundColour('blue')
+        self.notebox = wx.StaticBox(self.panel, size=(150,50))
+        self.noteboxsizer = wx.StaticBoxSizer(self.notebox, wx.VERTICAL)
+        self.noteboxsizer.Add(self.notetext, 0, wx.ALIGN_LEFT)
+        self.audiobutton = wx.Button(self.panel, -1, "Pause")
+        self.audiosizer.Add(self.audiobutton, 0, wx.ALIGN_CENTER | wx.ALL, border=5)
+        self.audiosizer.AddSpacer(10)
+        self.audiosizer.Add(self.noteboxsizer, 0, wx.ALIGN_CENTER | wx.ALL, border=5)
 
-    def animate(self, i):
-        data = np.frombuffer(self.stream.read(1024, exception_on_overflow=False), dtype=np.float32)
-        note = self.notes_o(data)[0]
-        peak = np.average(np.abs(data)) * 2
-        #bars = "#" * int(50 * peak / 2 ** 16)
+        self.audiobutton.Bind(wx.EVT_BUTTON, self.pause_play)
 
-        print("%04d %.1f %s" % (i, note, self.miditonote.get(note)))
-        self.xs.append(i)
-        self.ys.append(peak)
-        self.line.set_data(self.xs, self.ys)
-        self.ax.relim()
-        self.ax.autoscale()
-        return (self.line,)
+        #add both components to 1 sizer
+        self.mainsizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.mainsizer.Add(self.graphsizer, 1)
+        self.mainsizer.Add(self.audiosizer, 1, wx.RIGHT)
+        self.panel.SetSizer(self.mainsizer)
+        self.Fit()
+        self.panel.Layout()
 
-    def main(self):
+        plt.ion()
+        #prep timer
+        self.timercount = 0
+        self.timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.record, self.timer)
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+        self.timer.Start(100)
 
-        anim = animation.FuncAnimation(self.fig, self.animate, init_func=self.initani, interval=100, blit=False, repeat=False,)
-        plt.show()
-        #anim.save('./audio.gif', writer='imagemagick', fps=10)
-        #print("Saved")
+    def record(self, event):
+        if(self.stream.is_active()):
+            data = np.frombuffer(self.stream.read(1024, exception_on_overflow=False), dtype=np.float32)
+            note = self.notes_o(data)[0]
+            peak = np.average(np.abs(data)) * 2000
+            # bars = "#" * int(50 * peak / 2 ** 16)
 
-        self.stream.stop_stream()
-        self.stream.close()
-        self.p.terminate()
+            if (note != 0):
+                self.notetext.SetLabel(self.miditonote.get(note))
+
+            print("%04d %04d %.1f %s" % (self.timercount, peak, note, self.miditonote.get(note)))
+            self.xs.append(self.timercount)
+            self.timercount += 1
+            self.ys.append(peak)
+            self.line.set_data(self.xs, self.ys)
+            self.ax.relim()
+            self.ax.autoscale()
+            plt.plot()
+
+    def pause_play(self, event):
+        if(self.audiobutton.GetLabel() == "Pause"):
+            self.stream.stop_stream()
+            self.audiobutton.SetLabel("Play")
+        elif(self.audiobutton.GetLabel() == "Play"):
+            self.stream.start_stream()
+            self.audiobutton.SetLabel("Pause")
+
+    def OnClose(self, event):
+        if self.stream:
+            self.stream.stop_stream()
+            self.stream.close()
+        if self.p:
+            self.p.terminate()
+        if self.canvas:
+            self.canvas.Destroy()
+        plt.close('all')
+        self.Destroy()
+        self.parent.audio = None
 
 if __name__ == "__main__":
     app = wx.App()
