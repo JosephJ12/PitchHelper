@@ -1,7 +1,6 @@
 import pyaudio
 import numpy as np
 import matplotlib.pyplot as plt
-#from matplotlib.backends.backend_wxagg import NavigationToolbar2WxAgg as NavigationToolbar
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 import aubio
 from bs4 import BeautifulSoup
@@ -40,12 +39,21 @@ class MenuWindow(wx.Frame):
         self.audio.Show()
 
     def OnOpenSynth(self, event):
-        self.synth = SynthWindow(self)
+        if self.audio:
+            if not self.audio.synth and not self.synth:
+                self.synth = SynthWindow(self)
+        else:
+            if not self.synth:
+                self.synth = SynthWindow(self)
 
     def OnClose(self, event):
         if self.audio:
             self.audio.Destroy()
         if self.synth:
+            if self.synth.p:
+                self.p.terminate()
+            if self.synth.stream:
+                self.stream.close()
             self.synth.Destroy()
         self.Destroy()
 
@@ -127,10 +135,6 @@ class SynthWindow(wx.Frame):
         self.p.terminate()
 
     def OnClose(self, event):
-        if self.stream:
-            self.stream.close()
-        if self.p:
-            self.p.terminate()
         self.Destroy()
         self.parent.synth = None
 
@@ -140,6 +144,8 @@ class RecordWindow(wx.Frame):
         self.stream = None
         self.p = None
         self.parent = parent
+        self.dc = None
+        self.synth = None
 
         super().__init__(parent=None, title='Audio Recorder')
         plt.style.use('dark_background')
@@ -193,11 +199,17 @@ class RecordWindow(wx.Frame):
         self.noteboxsizer = wx.StaticBoxSizer(self.notebox, wx.VERTICAL)
         self.noteboxsizer.Add(self.notetext, 0, wx.ALIGN_LEFT)
         self.audiobutton = wx.Button(self.panel, -1, "Pause")
+        self.synthbutton = wx.Button(self.panel, -1, "Open Synthesizer")
+        self.audiosizer.AddSpacer(10)
         self.audiosizer.Add(self.audiobutton, 0, wx.ALIGN_CENTER | wx.ALL, border=5)
         self.audiosizer.AddSpacer(10)
         self.audiosizer.Add(self.noteboxsizer, 0, wx.ALIGN_CENTER | wx.ALL, border=5)
+        self.audiosizer.AddSpacer(280)
+        self.audiosizer.Add(self.synthbutton, 0, wx.ALIGN_CENTER | wx.ALL, border=5)
 
         self.audiobutton.Bind(wx.EVT_BUTTON, self.pause_play)
+        self.Bind(wx.EVT_PAINT, self.OnPaint)
+        self.synthbutton.Bind(wx.EVT_BUTTON, self.open_synth)
 
         #add both components to 1 sizer
         self.mainsizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -216,7 +228,7 @@ class RecordWindow(wx.Frame):
         self.timer.Start(100)
 
     def record(self, event):
-        if(self.stream.is_active()):
+        if(self.stream and self.stream.is_active()):
             data = np.frombuffer(self.stream.read(1024, exception_on_overflow=False), dtype=np.float32)
             note = self.notes_o(data)[0]
             peak = np.average(np.abs(data)) * 2000
@@ -225,7 +237,7 @@ class RecordWindow(wx.Frame):
             if (note != 0):
                 self.notetext.SetLabel(self.miditonote.get(note))
 
-            print("%04d %04d %.1f %s" % (self.timercount, peak, note, self.miditonote.get(note)))
+            #print("%04d %04d %.1f %s" % (self.timercount, peak, note, self.miditonote.get(note)))
             self.xs.append(self.timercount)
             self.timercount += 1
             self.ys.append(peak)
@@ -242,6 +254,72 @@ class RecordWindow(wx.Frame):
             self.stream.start_stream()
             self.audiobutton.SetLabel("Pause")
 
+    def open_synth(self, event):
+        if not self.parent.synth and not self.synth:
+            self.synth = SynthWindow(self)
+
+    def OnPaint(self, event):
+        # draw octave bar
+        self.dc = wx.PaintDC(self)
+        self.dc.Clear()
+        #grab note octave number
+        if self.notetext.GetLabel() != "":
+            octaveno = int(self.notetext.GetLabel()[-1])
+        else:
+            octaveno = -1
+
+        # set pen and brush color to rainbow color
+        self.dc.SetPen(wx.Pen("red", style=wx.SOLID))
+        if octaveno > 6:
+            self.dc.SetBrush(wx.Brush("red", style=wx.SOLID))
+        else:
+            self.dc.SetBrush(wx.NullBrush)
+        self.dc.DrawRectangle(720, 150, 50, 25)
+
+        self.dc.SetPen(wx.Pen(wx.Colour(255,165,0), style=wx.SOLID))
+        if octaveno > 5:
+            self.dc.SetBrush(wx.Brush(wx.Colour(255,165,0), style=wx.SOLID))
+        else:
+            self.dc.SetBrush(wx.NullBrush)
+        self.dc.DrawRectangle(720, 180, 50, 25)
+
+        self.dc.SetPen(wx.Pen("yellow", style=wx.SOLID))
+        if octaveno > 4:
+            self.dc.SetBrush(wx.Brush("yellow", style=wx.SOLID))
+        else:
+            self.dc.SetBrush(wx.NullBrush)
+        self.dc.DrawRectangle(720, 210, 50, 25)
+
+        self.dc.SetPen(wx.Pen(wx.Colour(0, 255, 0), style=wx.SOLID))
+        if octaveno > 3:
+            self.dc.SetBrush(wx.Brush(wx.Colour(0,255,0), style=wx.SOLID))
+        else:
+            self.dc.SetBrush(wx.NullBrush)
+        self.dc.DrawRectangle(720, 240, 50, 25)
+
+        self.dc.SetPen(wx.Pen("blue", style=wx.SOLID))
+        if octaveno > 2:
+            self.dc.SetBrush(wx.Brush("blue", style=wx.SOLID))
+        else:
+            self.dc.SetBrush(wx.NullBrush)
+        self.dc.DrawRectangle(720, 270, 50, 25)
+
+        self.dc.SetPen(wx.Pen(wx.Colour(63,0,255), style=wx.SOLID))
+        if octaveno > 1:
+            self.dc.SetBrush(wx.Brush(wx.Colour(63,0,255), style=wx.SOLID))
+        else:
+            self.dc.SetBrush(wx.NullBrush)
+        self.dc.DrawRectangle(720, 300, 50, 25)
+
+        self.dc.SetPen(wx.Pen(wx.Colour(128, 0, 128), style=wx.SOLID))
+        if octaveno > 0:
+            self.dc.SetBrush(wx.Brush(wx.Colour(128,0,128), style=wx.SOLID))
+        else:
+            self.dc.SetBrush(wx.NullBrush)
+        self.dc.DrawRectangle(720, 330, 50, 25)
+
+        self.panel.Refresh()
+
     def OnClose(self, event):
         if self.stream:
             self.stream.stop_stream()
@@ -250,9 +328,14 @@ class RecordWindow(wx.Frame):
             self.p.terminate()
         if self.canvas:
             self.canvas.Destroy()
+        if self.dc:
+            self.dc.Destroy()
+        if self.synth:
+            self.synth.Destroy()
         plt.close('all')
         self.Destroy()
         self.parent.audio = None
+        self.parent.Destroy()
 
 if __name__ == "__main__":
     app = wx.App()
