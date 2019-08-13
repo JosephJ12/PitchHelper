@@ -236,6 +236,8 @@ class RecordWindow(wx.Frame):
 
             if (note != 0):
                 self.notetext.SetLabel(self.miditonote.get(note))
+                if self.synth:
+                    self.synth.input_note.SetValue(self.miditonote.get(note))
 
             #print("%04d %04d %.1f %s" % (self.timercount, peak, note, self.miditonote.get(note)))
             self.xs.append(self.timercount)
